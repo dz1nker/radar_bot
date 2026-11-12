@@ -57,6 +57,12 @@ class Database:
                 PRIMARY KEY(chat_id, message_id)
             );
         ''')
+        # Retry notifications that failed on Windows before the timezone fix;
+        # do not make users wait for their previous (up to one hour) backoff.
+        await self.conn.execute(
+            "UPDATE outbox SET next_attempt=? WHERE sent_at IS NULL AND last_error='ZoneInfoNotFoundError'",
+            (now(),),
+        )
         await self.conn.commit()
 
     async def close(self):

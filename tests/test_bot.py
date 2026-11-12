@@ -311,3 +311,43 @@ async def test_main_startup_and_shutdown(tmp_path, monkeypatch):
     await main.run(Config('123456:FAKE_TOKEN', 99, str(tmp_path / 'startup.db')))
     assert [m.__class__.__name__ for m in session.calls] == ['GetMe', 'DeleteWebhook']
     assert session.calls[1].drop_pending_updates is False
+
+
+async def test_cards_and_notifications_without_timezone_database(h, monkeypatch):
+    """Windows does not ship an IANA tz database like Linux does."""
+    import zoneinfo
+    import zoneinfo._common
+
+    original_path = zoneinfo.TZPATH
+    zoneinfo.reset_tzpath(())
+    zoneinfo.ZoneInfo.clear_cache()
+
+    def missing_timezone(key):
+        raise zoneinfo.ZoneInfoNotFoundError(key)
+
+    monkeypatch.setattr(zoneinfo._common, 'load_tzdata', missing_timezone)
+    try:
+        await h.apply()
+        await h.send('/leads', user=99)
+        assert 'Заявка №1' in h.messages(99)[-1].text
+        await deliver_pending(h.bot, h.db, 99)
+        assert (await h.db.fetch('SELECT * FROM outbox'))[0]['sent_at']
+        row = await h.db.application(7)
+        row['updated_at'] = '2026-11-12T23:30:00+00:00'
+        assert '13.11.2026, 02:30 (МСК)' in texts.lead(row)
+    finally:
+        zoneinfo.reset_tzpath(original_path)
+        zoneinfo.ZoneInfo.clear_cache()
+
+
+async def test_restart_retries_old_timezone_failures_without_waiting(h):
+    await h.apply()
+    await h.db.execute("""UPDATE outbox SET attempts=10,
+        last_error='ZoneInfoNotFoundError',next_attempt='2099-01-01T00:00:00+00:00'""")
+    await h.db.close()
+    await h.db.open()
+    await deliver_pending(h.bot, h.db, 99)
+    event = (await h.db.fetch('SELECT * FROM outbox'))[0]
+    assert event['sent_at'] and event['last_error'] is None
+    assert event['attempts'] == 10
+    assert len(await h.db.fetch('SELECT * FROM applications')) == 1

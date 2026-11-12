@@ -1,6 +1,9 @@
 from html import escape
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+
+# Moscow uses UTC+3 without daylight saving for all dates created by this bot.
+# A fixed offset also works on Windows without an installed IANA timezone DB.
+MOSCOW = timezone(timedelta(hours=3), name='МСК')
 
 INTRO = (
     'Привет! 👋\n\nЯ готовлю бесплатный мини-радар для Telegram.\n\n'
@@ -73,7 +76,7 @@ def lead(row, updated=False):
     username = row['username']
     url = f'https://t.me/{username}' if username else f"tg://user?id={row['telegram_user_id']}"
     contact = '@' + username if username else name
-    date = datetime.fromisoformat(row['updated_at']).astimezone(ZoneInfo('Europe/Moscow'))
+    date = datetime.fromisoformat(row['updated_at']).astimezone(MOSCOW)
     title = '📝 Пользователь обновил заявку на мини-радар' if updated else '🔔 Новая заявка на мини-радар!'
     return (f'<b>{title}</b>\n\n👤 <b>Пользователь:</b> {escape(name)}\n'
             f'🔗 <b>Telegram:</b> <a href="{escape(url, quote=True)}">{escape(contact)}</a>\n'
