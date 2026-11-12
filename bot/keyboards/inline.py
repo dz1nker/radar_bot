@@ -15,10 +15,10 @@ def lead_buttons(row):
     username = row['username']
     url = (f'https://t.me/{username}' if username and re.fullmatch(r'[A-Za-z0-9_]{5,32}', username)
            else f"tg://user?id={row['telegram_user_id']}")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=texts.PROFILE_LABEL, url=url)],
-        [InlineKeyboardButton(text=texts.CONTACT_LABEL, callback_data=f"contact:{row['id']}:{row['version']}")],
-    ])
+    buttons = [[InlineKeyboardButton(text=texts.PROFILE_LABEL, url=url)]]
+    if row['status'] != 'CONTACTED':
+        buttons.append([InlineKeyboardButton(text=texts.CONTACT_LABEL, callback_data=f"contact:{row['id']}:{row['version']}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def pages(page, has_next):

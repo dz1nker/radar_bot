@@ -126,9 +126,12 @@ class Database:
     async def contacted(self, application_id, version):
         # An old notification must not mark a newly edited application reviewed.
         async with self.transaction() as conn:
-            cursor = await conn.execute("UPDATE applications SET status='CONTACTED',updated_at=? WHERE id=? AND version=?",
-                                        (now(), application_id, version))
-            return bool(cursor.rowcount)
+            await conn.execute("UPDATE applications SET status='CONTACTED',updated_at=? WHERE id=? AND version=? AND status!='CONTACTED'",
+                               (now(), application_id, version))
+            async with conn.execute('SELECT * FROM applications WHERE id=? AND version=?',
+                                    (application_id, version)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
 
     async def statistics(self):
         rows = await self.fetch('''SELECT COUNT(*) total,

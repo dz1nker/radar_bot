@@ -1,10 +1,13 @@
+import logging
+
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from bot import texts
 from bot.keyboards.inline import lead_buttons, pages
 
+logger = logging.getLogger(__name__)
 
 
 async def show_leads(message, db, page=0):
@@ -57,8 +60,21 @@ async def contact(callback: CallbackQuery, config, db):
     if len(parts) != 3 or not all(p.isdigit() and len(p) <= 18 for p in parts[1:]):
         await callback.answer(texts.ERROR, show_alert=True)
         return
-    changed = await db.contacted(int(parts[1]), int(parts[2]))
-    await callback.answer(texts.CONTACTED if changed else texts.STALE_LEAD, show_alert=True)
+    row = await db.contacted(int(parts[1]), int(parts[2]))
+    if row is None:
+        await callback.answer(texts.STALE_LEAD, show_alert=True)
+        return
+    try:
+        await callback.message.edit_text(
+            texts.lead(row, updated=row['version'] > 1), reply_markup=lead_buttons(row),
+        )
+    except TelegramAPIError as exc:
+        # Re-delivered callbacks can edit an already updated card; that is OK.
+        if not (isinstance(exc, TelegramBadRequest) and 'message is not modified' in exc.message.lower()):
+            logger.warning('Lead %s card edit failed: %s', row['id'], type(exc).__name__)
+            await callback.answer(texts.CONTACTED_REFRESH_FAILED, show_alert=True)
+            return
+    await callback.answer(texts.CONTACTED)
 
 
 async def pagination(callback: CallbackQuery, config, db):

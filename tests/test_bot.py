@@ -7,8 +7,8 @@ import pytest_asyncio
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
-from aiogram.exceptions import TelegramForbiddenError
-from aiogram.methods import SendMessage
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.methods import EditMessageText, SendMessage
 from aiogram.types import Message, Update
 
 from bot import texts
@@ -23,12 +23,15 @@ class FakeSession(BaseSession):
         super().__init__()
         self.calls = []
         self.fail_chat = None
+        self.edit_error = None
 
     async def close(self):
         pass
 
     async def make_request(self, bot, method, timeout=None):
         self.calls.append(method)
+        if isinstance(method, EditMessageText) and self.edit_error:
+            raise TelegramBadRequest(method=method, message=self.edit_error)
         if isinstance(method, SendMessage):
             if method.chat_id == self.fail_chat:
                 raise TelegramForbiddenError(method=method, message='blocked')
@@ -201,6 +204,10 @@ async def test_admin_commands_status_and_reply(h):
     assert 'Консультант &lt;b&gt;' in h.messages()[-1].text
     await h.send(callback='contact:1:1', user=99)
     assert (await h.db.application(7))['status'] == 'CONTACTED'
+    edit = next(c for c in reversed(h.session.calls) if isinstance(c, EditMessageText))
+    assert edit.chat_id == 99
+    assert 'Статус: CONTACTED' in edit.text
+    assert len(edit.reply_markup.inline_keyboard) == 1  # Only profile, no contact button.
     await h.send('/reply 7 Привет <test>', user=99)
     assert h.messages(7)[-1].text == 'Привет <test>' and h.messages(7)[-1].parse_mode is None
     assert h.messages(99)[-1].text == texts.REPLY_OK
@@ -237,6 +244,41 @@ async def test_id_details_and_stale_contact(h):
     await h.send('Новая аудитория')
     await h.send(callback='contact:1:1', user=99)
     assert (await h.db.application(7))['status'] == 'NEW'
+    assert not any(isinstance(c, EditMessageText) for c in h.session.calls)
+
+
+async def test_contact_edits_notification_card_and_handles_duplicate(h):
+    await h.apply()
+    await deliver_pending(h.bot, h.db, 99)
+    await h.send(callback='contact:1:1', user=99, number=800)
+    edit = next(c for c in reversed(h.session.calls) if isinstance(c, EditMessageText))
+    assert (edit.chat_id, edit.message_id) == (99, 800)
+    assert 'Статус: CONTACTED' in edit.text
+    saved = await h.db.application(7)
+    h.session.edit_error = 'Bad Request: message is not modified'
+    await h.send(callback='contact:1:1', user=99, number=800)
+    assert h.session.calls[-1].text == texts.CONTACTED
+    assert (await h.db.application(7))['updated_at'] == saved['updated_at']
+    await h.send('/leads', user=99)
+    assert 'Статус: CONTACTED' in h.messages(99)[-1].text
+    assert len(h.messages(99)[-1].reply_markup.inline_keyboard) == 1
+
+
+async def test_contact_survives_uneditable_message(h):
+    await h.apply()
+    h.session.edit_error = "Bad Request: message can't be edited"
+    await h.send(callback='contact:1:1', user=99)
+    assert (await h.db.application(7))['status'] == 'CONTACTED'
+    assert h.session.calls[-1].text == texts.CONTACTED_REFRESH_FAILED
+    assert h.session.calls[-1].show_alert is True
+
+
+async def test_contact_never_edits_cards_for_non_admin(h):
+    await h.apply()
+    await h.send(callback='contact:1:1')
+    assert (await h.db.application(7))['status'] == 'NEW'
+    assert not any(isinstance(c, EditMessageText) for c in h.session.calls)
+    assert h.session.calls[-1].text == texts.DENIED
 
 
 def test_config_validation(monkeypatch):
